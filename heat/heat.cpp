@@ -365,14 +365,14 @@ double exact_solution_polar(double r, double t, double eps = 0.001)
 
 void dump_result(const std::vector<double>& y, std::function<double(double)> exact_y)
 {
-    std::cout << "No\t<==>\texact\t<==>\tcalculated\tdiff=\t(%)" << std::endl;
+    std::cerr << "No\t<==>\texact\t<==>\tcalculated\tdiff=\t(%)" << std::endl;
 
     for (int i = 0; i < y.size(); ++i)
     {
         double x = 1. / (y.size() - 1) * i;
         //std::cout << x << ", ";
         double exact = exact_y(x);
-        std::cout << i << "\t<==>\t" << exact << "\t<==>\t" << y[i] << ",\tdiff=" << exact - y[i] << "\t(" << std::abs(exact - y[i]) / std::max(std::abs(exact), std::abs(y[i])) * 100 << "%)" << std::endl;
+        std::cerr << i << "\t<==>\t" << exact << "\t<==>\t" << y[i] << ",\tdiff=" << exact - y[i] << "\t(" << std::abs(exact - y[i]) / std::max(std::abs(exact), std::abs(y[i])) * 100 << "%)" << std::endl;
     }
 }
 
