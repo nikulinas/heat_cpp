@@ -61,7 +61,9 @@ struct BoundaryCondition3rd
 class ExplicitDifferenceSchemeException : public std::exception
 {
 public:
-    ExplicitDifferenceSchemeException(char const* const msg) : std::exception(msg) {}
+    ExplicitDifferenceSchemeException(char const* const msg) : std::exception() {
+        std::cerr << msg << std::endl;
+    }
 };
 
 struct Timer
@@ -79,8 +81,11 @@ struct Timer
 
 double error(const std::vector<double>& v1, const std::vector<double>& v2)
 {
-    if (v1.size() != v2.size())
-        throw std::exception("Vector sizes must be equal");
+    if (v1.size() != v2.size()) {
+        std::cerr << "Vector sizes must be equal" << std::endl;
+        throw std::exception();
+    }
+
 
     double summ = 0;
     double compare = 0;
@@ -143,22 +148,25 @@ std::vector<double> explicit_difference_scheme(const std::vector<double>& y0, do
         for (decltype(N) n = 1; n <= N; ++n)
         {
             double t_curr = n * tau;
+            double x = a;
 
             //inner nodes
             TmpVal* curr_tmp = &tmp[0];
             if (y.size() > 2)
             {
-                curr_tmp->val = scheme(a + h, y[0], y[1], y[2]);
+                x += h;
+                curr_tmp->val = scheme(x, y[0], y[1], y[2]);
                 if (y.size() > 3)
                 {
+                    x += h;
                     curr_tmp = &tmp[1];
-                    curr_tmp->val = scheme(a + 2 * h, y[1], y[2], y[3]);
+                    curr_tmp->val = scheme(x, y[1], y[2], y[3]);
                 }
             }
 
             for (decltype(y.size()) i = 3; i < y.size() - 1; ++i)
             {
-                double x = a + h * i;
+                x += h;
                 curr_tmp = curr_tmp->next;
                 y[i - 2] = curr_tmp->val;
                 curr_tmp->val = scheme(x, y[i - 1], y[i], y[i + 1]);
@@ -325,9 +333,9 @@ double exact_solution_decart00(double x, double t, double a, double l, std::func
 }
 
 
-unsigned long double fact(int n)
+long double fact(int n)
 {
-    unsigned long double res = 1;
+    long double res = 1;
     for (int i = 1; i <= n; ++i)
         res *= i;
 
