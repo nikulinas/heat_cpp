@@ -36,19 +36,39 @@ struct PolarScheme : Scheme
 {
     double m_k1, m_k2;
     PolarScheme(double ñoeff, double tau, double h) : Scheme(ñoeff, tau, h), m_k1(ñoeff* tau / h / h), m_k2(ñoeff* tau / 2 / h) {}
-    double operator()(double r, double y1, double y2, double y3)
+    inline double operator()(double r, double y1, double y2, double y3)
     {
         return m_k1 * (y1 - 2 * y2 + y3) + m_k2 / r * (y3 - y1) + y2;
     }
 };
 
+struct BoundaryCondition
+{
+    virtual double operator()(double h, double t_curr, double y1, double y2) const = 0;
+};
+struct BoundaryCondition1rd : BoundaryCondition {
+    double m_U;
+    BoundaryCondition1rd(double U) : m_U(U) {}
+    virtual double operator()(double h, double t_curr, double y1, double y2) const
+    {
+        return m_U;
+    }
+};
+struct BoundaryCondition2rd : BoundaryCondition {
+    double m_dU;
+    BoundaryCondition2rd(double dU) : m_dU(dU) {}
+    virtual double operator()(double h, double t_curr, double y1, double y2) const
+    {
+        return (2.0 * h * m_dU + 4.0 * y1 - y2) / 3.0;
+    }
+};
 // kU * dU/dx + kdU * U = C
-struct BoundaryCondition3rd
+struct BoundaryCondition3rd: BoundaryCondition
 {
     double m_kU, m_kdU, m_C;
     BoundaryCondition3rd(double kU, double kdU, double C) :m_kU(kU), m_kdU(kdU), m_C(C) {}
 
-    double operator()(double h, double t_curr, double y1, double y2)
+    virtual double operator()(double h, double t_curr, double y1, double y2) const
     {
         double divider = 2 * h * m_kU / m_kdU - 3;
         if (is_epsilon(divider, 3, 0.00001))
@@ -102,16 +122,11 @@ double error(const std::vector<double>& v1, const std::vector<double>& v2)
     return summ / compare;
 }
 
-using bc_t = std::function<double(double, double, double, double)>;
-
 template<class scheme_t>
-std::vector<double> explicit_difference_scheme(const std::vector<double>& y0, double ñoeff, double a, double b, double t, bc_t bc_a, bc_t bc_b, double eps = 0.001, unsigned int max_iter = 100)
+std::vector<double> explicit_difference_scheme(const std::vector<double>& y0, double ñoeff, double a, double b, double t, const BoundaryCondition& bc_a, const BoundaryCondition& bc_b, double eps = 0.001, unsigned int max_iter = 1000)
 {
-    if (y0.size() < 2)
-        throw ExplicitDifferenceSchemeException("Minimum 2 points are required");
-
-    if (!bc_a || !bc_b)
-        throw ExplicitDifferenceSchemeException("Boundary conditions must be defined");
+    if (y0.size() < 3)
+        throw ExplicitDifferenceSchemeException("Minimum 3 points are required");
 
     if (b < a)
         throw ExplicitDifferenceSchemeException("Incorrect interval");
@@ -124,72 +139,57 @@ std::vector<double> explicit_difference_scheme(const std::vector<double>& y0, do
 
     Timer timer;
 
-    double h = (b - a) / (y0.size() - 1);
+    auto y0_size = y0.size();
+
+    double h = (b - a) / (y0_size - 1);
     if (h <= std::numeric_limits<double>::epsilon() * b)
         throw ExplicitDifferenceSchemeException("Interval is too small");
 
     unsigned int N = static_cast<unsigned int>(std::round(2 * ñoeff * t / h / h + 0.5));
     unsigned int iter = 1;
     double err = 0;
-    std::remove_const<std::remove_reference<decltype(y0)>::type>::type y(y0.size(), 0), y_prev(y0.size(), 0);
-    struct TmpVal
-    {
-        double val;
-        TmpVal* next;
-    } tmp[2] = { {0, tmp + 1}, {0, tmp} };
+    std::remove_const<std::remove_reference<decltype(y0)>::type>::type y_prev, ys[2];
+
+    ys[0].resize(y0_size, 0);
+    ys[1].resize(y0_size, 0);
+
+    std::vector<double> x(y0_size);
+    x[0] = a;
+    for (decltype(y0_size) i = 1; i < y0_size; ++i)
+        x[i] = x[i - 1] + h;
 
     do
     {
-        y_prev = y;
-        y = y0;
+        std::swap(y_prev, ys[1]);
+        ys[1] = y0;
         double tau = t / N;
+        std::vector<double> t_curr(N + 1);
+        for (decltype(N) n = 0; n <= N; ++n)
+            t_curr[n] = n * tau;
+
         std::cout << "iter=" << iter << ", h=" << h << ", tau=" << tau;
         scheme_t scheme(ñoeff, tau, h);
+        double m_k1 = ñoeff * tau / h / h, m_k2 = ñoeff * tau / 2 / h;
         for (decltype(N) n = 1; n <= N; ++n)
         {
-            double t_curr = n * tau;
-            double x = a;
+           std::swap(ys[0], ys[1]);
+           double* ysd[2] = { ys[0].data(), ys[1].data() };//std::vector::operator[] works slowly
 
-            //inner nodes
-            TmpVal* curr_tmp = &tmp[0];
-            if (y.size() > 2)
-            {
-                x += h;
-                curr_tmp->val = scheme(x, y[0], y[1], y[2]);
-                if (y.size() > 3)
-                {
-                    x += h;
-                    curr_tmp = &tmp[1];
-                    curr_tmp->val = scheme(x, y[1], y[2], y[3]);
-                }
-            }
-
-            for (decltype(y.size()) i = 3; i < y.size() - 1; ++i)
-            {
-                x += h;
-                curr_tmp = curr_tmp->next;
-                y[i - 2] = curr_tmp->val;
-                curr_tmp->val = scheme(x, y[i - 1], y[i], y[i + 1]);
-            }
-            if (y.size() > 2)
-            {
-                y[y.size() - 2] = curr_tmp->val;
-                if (y.size() > 3)
-                    y[y.size() - 3] = curr_tmp->next->val;
-            }
+           for (decltype(y0_size) i = 1; i < y0_size - 1; ++i)
+               ysd[1][i] = scheme(x[i], ysd[0][i - 1], ysd[0][i], ysd[0][i + 1]);
 
             //boundary conditions
-            y[0] = bc_a(h, t_curr, y[1], y[2]);
-            y[y.size() - 1] = bc_b(h, t_curr, y[y.size() - 2], y[y.size() - 3]);
+           ysd[1][0] = bc_a(h, t_curr[n], ysd[1][1], ysd[1][2]);
+           ysd[1][y0_size - 1] = bc_b(h, t_curr[n], ysd[1][y0_size - 2], ysd[1][y0_size - 3]);
         }
 
-        err = error(y, y_prev);
+        err = error(ys[1], y_prev);
         std::cout << ", N = " << N << ", err = " << err << std::endl;
         N *= 2;
 
     } while (err > eps && iter++ <= max_iter);
 
-    return y; //hope for RVO;
+    return ys[1]; //hope for RVO;
 }
 
 std::vector<double> test_ring(std::vector<double>& U, double R1, double R2, std::chrono::duration<double, std::ratio<1>> t, double density, double Cp, double thermal_conductivity, double heat_transfer_coefficient1, double heat_transfer_coefficient2, double T1, double T2, double eps = 0.1)
@@ -373,14 +373,14 @@ double exact_solution_polar(double r, double t, double eps = 0.001)
 
 void dump_result(const std::vector<double>& y, std::function<double(double)> exact_y)
 {
-    std::cerr << "No\t<==>\texact\t<==>\tcalculated\tdiff=\t(%)" << std::endl;
+    std::cerr << "No\t<==>\calculated\t<==>\ttexact\tdiff=\t(%)" << std::endl;
 
     for (int i = 0; i < y.size(); ++i)
     {
         double x = 1. / (y.size() - 1) * i;
         //std::cout << x << ", ";
         double exact = exact_y(x);
-        std::cerr << i << "\t<==>\t" << exact << "\t<==>\t" << y[i] << ",\tdiff=" << exact - y[i] << "\t(" << std::abs(exact - y[i]) / std::max(std::abs(exact), std::abs(y[i])) * 100 << "%)" << std::endl;
+        std::cerr << i << "\t<==>\t" << y[i] << "\t<==>\t" << exact << ",\tdiff=" << exact - y[i] << "\t(" << std::abs(exact - y[i]) / std::max(std::abs(exact), std::abs(y[i])) * 100 << "%)" << std::endl;
     }
 }
 
@@ -390,7 +390,9 @@ void test1(int nodes, double eps)
     std::vector<double> y(nodes, 1.0);
     double t = 6;
 
-    y = explicit_difference_scheme<CartesianScheme>(y, 4, 0, 1, t, [](double, double, double, double) {return 0; }, [](double, double, double, double) {return 1; }, eps);
+    BoundaryCondition1rd bc_a(0);
+    BoundaryCondition1rd bc_b(1);
+    y = explicit_difference_scheme<CartesianScheme>(y, 4, 0, 1, t, bc_a, bc_b, eps);
     dump_result(y, [t](double x) {return exact_solution_decart(x, t);});
 }
 
@@ -414,7 +416,9 @@ void test2(int nodes, double eps)
     }
 
     double t = 1;
-    y = explicit_difference_scheme<CartesianScheme>(y, a, 0, l, t, [](double, double, double, double) {return 0; }, [](double, double, double, double) {return 0; }, eps);
+    BoundaryCondition1rd bc_a(0);
+    BoundaryCondition1rd bc_b(0);
+    y = explicit_difference_scheme<CartesianScheme>(y, a, 0, l, t, bc_a, bc_b, eps);
 
     dump_result(y, [t, a, l, T0](double x) {return exact_solution_decart00(l * x, t, a, l, T0); });
 }
@@ -430,11 +434,9 @@ void test3(int nodes, double eps)
     }
 
     double t = 5;
-    auto bc_a = [](double h, double t_curr, double y1, double y2)
-    {
-        return (4 * y1 - y2) / 3;
-    };
-    y = explicit_difference_scheme<PolarScheme>(y, 4, 0, 8, t, bc_a, [](double, double, double, double) {return 0; }, eps);
+    BoundaryCondition2rd bc_a(0);
+    BoundaryCondition1rd bc_b(0);
+    y = explicit_difference_scheme<PolarScheme>(y, 4, 0, 8, t, bc_a, bc_b, eps);
 
     dump_result(y, [t](double x) {return exact_solution_polar(8 * x, t); });
 }
